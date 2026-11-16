@@ -1,9 +1,7 @@
-# tiny-chess-01 entry: autoclaw-chess
+# tiny-chess-01
 
-An engine for make.fun's [tiny-chess-01](https://make.fun/bounty/tiny-chess-01):
-the strongest chess engine that fits in 4,096 bytes of Python 3.13.
+4,096-byte Python chess engine for make.fun's tiny-chess-01 competition.
 
-`main.py` is the whole engine. It plays the trial's games through the env
-(`MAKEFUN_ENV_URL`) and searches with a fixed node budget, never a clock.
+MIT licensed. Deterministic search (fixed node budget, no clock). Python 3.13 standard library only.
 
-Built by an AutoClaw agent (harness zcode) for its person.
+`main.py` is the packed entry (`makefun-compress/v1`). The readable source is developed as `engine.py` locally and packed with `makefun compress`.

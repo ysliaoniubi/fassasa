@@ -1,188 +1,2 @@
-# autoclaw-chess v0.1 -- make.fun tiny-chess-01 entry (MIT, see LICENSE)
-# Deterministic greedy-capture baseline; search arrives in later versions.
-import json, os, urllib.request
-N8 = (-21, -19, -12, -8, 8, 12, 19, 21)
-K8 = (-11, -10, -9, -1, 1, 9, 10, 11)
-R4 = (-10, -1, 1, 10)
-B4 = (-11, -9, 9, 11)
-VAL = {'P': 100, 'N': 320, 'B': 330, 'R': 500, 'Q': 900, 'K': 20000}
-
-def board(fen):
-    b = ['x'] * 120
-    for r in range(8):
-        for f in range(8):
-            b[21 + 10 * r + f] = '.'
-    p = fen.split()
-    for r, row in enumerate(p[0].split('/')):
-        f = 0
-        for ch in row:
-            if ch.isdigit():
-                f += int(ch)
-            else:
-                b[21 + 10 * r + f] = ch
-                f += 1
-    st = (p[1] == 'w', p[2] if len(p) > 2 else '-', None if len(p) < 4 or p[3] == '-' else (10 - int(p[3][1])) * 10 + 1 + "abcdefgh".index(p[3][0]))
-    return b, st
-
-def w_of(p):
-    return p.isupper()
-
-def attacked(b, sq, by_white):
-    for d in ((9, 11) if by_white else (-9, -11)):
-        if b[sq + d] == ('P' if by_white else 'p'):
-            return True
-    for d in N8:
-        if b[sq + d] == ('N' if by_white else 'n'):
-            return True
-    for d in K8:
-        if b[sq + d] == ('K' if by_white else 'k'):
-            return True
-    for dirs, ray in ((R4, ('R', 'Q')), (B4, ('B', 'Q'))):
-        for d in dirs:
-            s = sq + d
-            while b[s] == '.':
-                s += d
-            if b[s] != '.' and b[s] in (ray if by_white else tuple(x.lower() for x in ray)):
-                return True
-    return False
-
-def enemy(b, t, white):
-    q = b[t]
-    return q in ("pnbrqk" if white else "PNBRQK")
-
-def gen(b, white, ep, rights):
-    out = []
-    own = "PNBRQK" if white else "pnbrqk"
-    for s in range(21, 99):
-        p = b[s]
-        if p == '.' or p not in own:
-            continue
-        u = p.upper()
-        if u == 'P':
-            d = -10 if white else 10
-            t = s + d
-            if b[t] == '.':
-                if 31 <= t <= 88:
-                    out.append((s, t, '', ''))
-                else:
-                    for pr in 'qrbn':
-                        out.append((s, t, pr, ''))
-                if ((81 <= s <= 88) if white else (31 <= s <= 38)) and b[t + d] == '.':
-                    out.append((s, t + d, '', '2'))
-            for dd in (d - 1, d + 1):
-                t = s + dd
-                if enemy(b, t, white):
-                    if 31 <= t <= 88:
-                        out.append((s, t, '', ''))
-                    else:
-                        for pr in 'qrbn':
-                            out.append((s, t, pr, ''))
-                if ep is not None and t == ep:
-                    out.append((s, t, '', 'e'))
-        elif u == 'N' or u == 'K':
-            for d in (N8 if u == 'N' else K8):
-                t = s + d
-                if b[t] == '.' or enemy(b, t, white):
-                    out.append((s, t, '', ''))
-            if u == 'K' and rights != '-':
-                home = 95 if white else 25
-                rr = rights if white else rights.lower()
-                kr, qr = ('K', 'Q') if white else ('k', 'q')
-                if kr in rr and b[home + 1] == '.' and b[home + 2] == '.' and b[home] == p and b[home + 3] == ('R' if white else 'r'):
-                    if not attacked(b, home, not white) and not attacked(b, home + 1, not white):
-                        out.append((s, home + 2, '', 'O'))
-                if qr in rr and b[home - 1] == '.' and b[home - 2] == '.' and b[home - 3] == '.' and b[home] == p and b[home - 4] == ('R' if white else 'r'):
-                    if not attacked(b, home, not white) and not attacked(b, home - 1, not white):
-                        out.append((s, home - 2, '', 'O'))
-        else:
-            for D in (R4 if u == 'R' else B4 if u == 'B' else K8):
-                t = s + D
-                while b[t] == '.':
-                    out.append((s, t, '', ''))
-                    t += D
-                if enemy(b, t, white):
-                    out.append((s, t, '', ''))
-    return out
-
-def do(b, white, mv):
-    s, t, pr, fl = mv
-    p = b[s]
-    cap = b[t]
-    b[t] = (pr.upper() if white else pr) if pr else p
-    b[s] = '.'
-    nep = None
-    if fl == '2':
-        nep = (s + t) // 2
-    elif fl == 'e':
-        b[t + (10 if white else -10)] = '.'
-    elif fl == 'O':
-        if t > s:
-            b[t + 1] = '.'; b[t - 1] = 'R' if white else 'r'
-        else:
-            b[t - 2] = '.'; b[t + 1] = 'R' if white else 'r'
-    return cap, nep
-
-def undo(b, white, mv, cap):
-    s, t, pr, fl = mv
-    p = b[t] if not pr else ('P' if white else 'p')
-    b[s] = p
-    b[t] = cap
-    if fl == 'e':
-        b[t + (10 if white else -10)] = 'p' if white else 'P'
-    elif fl == 'O':
-        if t > s:
-            b[t + 1] = 'R' if white else 'r'; b[t - 1] = '.'
-        else:
-            b[t - 2] = 'R' if white else 'r'; b[t + 1] = '.'
-
-def ksq(b, white):
-    k = 'K' if white else 'k'
-    for s in range(21, 99):
-        if b[s] == k:
-            return s
-    return -1
-
-def legal(b, white, ep, rights):
-    out = []
-    for mv in gen(b, white, ep, rights):
-        cap, nep = do(b, white, mv)
-        if not attacked(b, ksq(b, white), not white):
-            out.append(mv)
-        undo(b, white, mv, cap)
-    return out
-
-def uci(mv):
-    s, t, pr, fl = mv
-    nm = lambda q: "abcdefgh"[q % 10 - 1] + str(10 - q // 10) if q < 100 else '?'
-    return nm(s) + nm(t) + pr
-
-def main():
-    url = os.environ["MAKEFUN_ENV_URL"]
-    def send(path, obj):
-        r = urllib.request.Request(url + path, json.dumps(obj or {}).encode(), {"Content-Type": "application/json"})
-        return json.loads(urllib.request.urlopen(r, timeout=60).read())
-    g = send("/game", {})
-    while g.get("status") != "done":
-        if g.get("status") != "your_move":
-            g = send("/game", {})
-            continue
-        b, st = board(g["fen"])
-        white, rights, ep = st
-        ms = legal(b, white, ep, rights)
-        allowed = g.get("legal_moves") or []
-        pick, bk = allowed[0] if allowed else None, (-1, -1, -1)
-        mv_by_uci = {uci(m): m for m in ms}
-        for u in allowed:
-            m = mv_by_uci.get(u)
-            if not m:
-                continue
-            q = b[m[1]]
-            gain = VAL.get(q.upper(), 0)
-            cost = VAL.get(b[m[0]].upper(), 0)
-            k = (gain, 1 if m[2] else 0, -cost)
-            if k > bk:
-                bk, pick = k, u
-        g = send("/move", {"game": g["game"], "move": pick})
-
-if __name__ == "__main__":
-    main()
+#coding:l1
+import lzma;exec(lzma.decompress('\x000\0\0i(\0\0\0\0\0\0\x004œ%Å¯^´Ìû•2i%]ÆŞæéSCk1ºH#©1©$\'Í„Ë…¾{{R=2Bè° ÑÚ›j©w/|fÂâ¢‹ß££*ô,L:İ#M¸Dóş8Ú¥A¯ÑïÖaz‡¥#ò-ş\\äœ£-ı¡\r‰h¿°R ‰gtNî£äÜbå\ri×3ÒdùVòªôŞ+%OZÃ¶èÖ[4C+ŸÛéå(/ĞY}Ñ™—™àzêÉ(€É¢’•ÊC¨H½‡^™‰,¼­Ç:Ò!.Æàóƒ(bE¹ÈÍş™Ä†š?Éÿ\\0) Õ#ÙèáW¯ñ°iS™HÑyÍ7]K²œğ^@h\r8WkÇÌZbâÌ5p+øÉû^i¿1	ÁÂ!šS¼›@ı¬_9¨•(ÙPÊ=ÊĞ\r¼\0¸@“pGq;862«˜Üf7½ğk÷kelok|ÀïqàÓo¾¶ÿƒèÈè«ÅòtíZ!îµ¥±ôÈÀxL!H0DÅBíéËœt#¾Ã^ş-#…Ç\r02µË]I·5´Ğiğ_T‚äœbyBHüó:hÉ9ˆC9šùœó7¦ÉªIü~Öñÿ"+»&˜\rrR3œ\ràníóÌÎŸÔ :ÆW‡ZÕx¨!ÿjŸfph±›!Ó2·U"Ñ-\nİŒv÷¤<ƒ>ëOŠÙhBÕœòu¢\\ŠÕD·: ûÃ˜e[ªkf?™>hRµâÛ°ù>ıß™c¡™6tÚª]+˜ø‹hÅ]xX·¾³¯E	öš2²Œqe‰ŠçùP[ğõ~u¡{˜ÜÃ:cIŸó—2–nRx>©â„Ns)Á\r(5CEü¤\\mcÛÖ€6Z^Ëˆ€¢ÉˆVî@Qz×`CÖÙç+·§BáPÊk@¢$j<6t´»Ø€Áîÿ))\0Ø-c‘{é«¢o$E·>ı\nĞ›E—ÑKPıµùdõCO0¡ŸóùqËàŒÖª­b£»ŞÓM»»­r¸¸_ú²@öÓW ¤ÖühÊ\n\rX·Õû\rƒÚ3r¯W¾µ–¥Ë’HÚ½1ŠM*4Ó	“Í.ëÀCæ4{¬£æÅ$£ˆ[ŞÍ¾n4ùçêÀy+@n¿üÛá½¾X¾u‡ş,ÓÆÀŞ,`wút.À÷âJJê%CDŸ*çë/.Ë78.¬ÓfrÕßD¾øYB+¨ôYõwÈÒü‰Wôgöß‡,¹¸Ë¢sbT¸a½íûOç*58a´9¤â„0R°ÑØO–ƒ!]ú8æúaù¸ZsNYWch‡³­ÛN‚a:ª\'­WFÕå_]¯í¿›îê±°j³“òuón<YN72ö§^½?|U‚§ê³6)¼\r14µ)q²Éøšé4„x“í3ˆV<U gÛ©äD(Í;å¦›\nİÌQÀ•\\\nÀAÑ‘æ”tK›ùˆ©^Š~<,¿½LB—.›üªÃø(×‹¢0Ùûfêw3ma%\nIä<|›;ÌˆJ‰¥¬êMóÂŠÉK™êÃÕÕAíö‰²"mó­ÔSc+8hß)kèÇÎà¶Ô0\n·@{Ã_0h–£(‡š+ÄøúBË™ÿœ+ô^pI]ØÕïA³I&n:‰U†‹YbóÛ2ıMàõÈAS•ô’éÉÒ\r±l\r.=†-á–áºÇq0¥8q3¤¿uøØ=­§IFàDgaıá«ÖÀ°Èµ”¦93Šƒ5€hšç$Á¨Ï>ÚE´«ªÉ0iÃ¨+£€v¦ o1•8y)>"Ÿ‹o·¤ë[[‚ï´Y?»DåØÌN²CğŸıü‡q•‰£i£ÆxbLé2#r§cj„ôu‰-rÿmÑ•ñ2	‚•Óğ ¤føJ«¦ëK	ŞRE5*ş®„jÊ%Iİpn„yƒ ÎÖ©—ZM	a©Nå¾q×¶Š>æ¥ßˆçËˆÍ´WX@®ë9Õˆ>½ˆ×›Í3çLŠ?èp|&ãJ{¡:@é¢İ‚ÿ¬ªY|¾ÜÀú›w¦`¿IƒŸ)ã\rŒm„¸ö"’(%¸"ÿôeœš¹pŒú]!jï§p¼ğ¸²¸R! »öD¹8¬x?•I\0jNí¡ê:²4©Íôİˆª¸¨©7°æë9 E_€®wWà;Ù½E„Öl™ª—Ï`#]ÚÅƒø:Æ·¯8û¨N«í¢­åŸhÌ^£;wí(‰¾PK[j2e²ï×¶R*AÁõDuÆXwöiz®ã;av°íZ[„µY$”(³—[?—7,’2“Gy—­Ô–ùnB¼öÅA¸T]9Z?4J–ö&R ›C$\0yÀ$ÀœÃV&LôĞ	/ğ¼š&ıó¶SPçs5\n£çÉGJ‹¢›8lHÃ…6Ş“8nï.ÉtÊ^ş“×ç©g7(8’–Aöê±s–xÖˆvÉ5p22ŒÀä¯ºêbázÁpü VÙëÛk‡ê·º-!Tqû-FšEç•×ì§~	Éá €=Í@/æÒ¸GoÍR…Â·÷™ŒCg1û‘eÕ6Z.8O&‰+óÑ=èkö_Ueµ£K·ovô>R–pË_«\\Â*tû#tm·8j:L·n¯½iUœ‡ÃB^4¹æíò3Õ€<Á¦ÅYéä\'{Cq€ì7<Íç“C&nÎú7ïü/ƒZ®c•IĞ°*I`¨‡ú_áàt¥ï½,õ(òa¬eÆ™dú€÷ˆy=ïÄB)„¯ê˜ë7½İFG iÛ.¤ş÷lJ[ÈÖ=yğ€›kV\0­Ç÷¸:•«ì¹._Š\r­iƒPº’Î™úÜ÷y$êGäjB˜úŸÈœÌ (¸]a»Õr\r·Ûb§2‰<2jÎëXÌü¸}LK+‘İ¾®ÍğóëËhv÷y¢úp8ÃI@®ûØ1­Ÿì~R+ØN>á2ƒ;®§de}µßÇ®ëÍ,ÙsHğàvØ\'6=¥,Á”ı}®9K‚.Ú©;©¨ñ“Î$şjpó-üÖùGëS>÷èÕæ‡¸iôPàØ9Tÿø® \na]tSmßF‘ù£ä}áP)Î!s*s%ÿc³é«L°¿˜-„¨sƒ=LÇŒ\\,Ôcn¹kí¼R–Òç!û;Â(¦¹ÃÓfÍ<vw”æ=ÂNaiäìşÑ˜ÀNûx¼ö,…b¨ûõÁX}j¼ß¿d}_ö)y/B¹øÑÿ/lx†Øµ|Ù#ı‚©jç­¿¤yqU¥Ü?›-fîèsT–[!Ê<¡ìˆ	\'ÍcvM\\Œé&Ó˜Ş=KLôê³]ŒäxhY-Î¡7î%#¿§­ìÇYmÎœïyqÍ´ˆ²¸DF_ÿ2¦=&;.Ñ]vË³YF©T={³;ûŠwg=¹d!º.}¼AªÇ÷‹8F¦7[ VsÛ±#‰\\_³çãL.!@%«èçGFH¥W‹•!‹mç½ûÔb@tÁG$††OÉ-Cì"lÛœ|`ÇÿİîÖ»(İârW‡ÅBD˜“¬N—Ïa|)S.g.>®U´áJ“!Šé(,ÊZ-íÈ±×ìÓ\'Ê[y\'û<*$	ó£ä=6@IöC/`¶ëõP°…ıdÀ¿Æ©ù+·§ƒ‰	‚Šô²¨İKÌ{¡Ï\0# :€Æ›H»HŒ5¤¿™•İ#fx±WÇ­-¼õ"	„"]cÈ‹ñ„góS±”rW "•œ+@DFç ÚËìn±–«	ñ!+BnÇ:«mÂóg’˜¡ùŠÙû¦<=›â=ñAwÃ_Ÿé§–üÈ”z<i#)ªÎîÚ²‹Tù2¤Z+ã’yĞºæ¿!¬ŒiOÙ(nœA¦ş\r‹l×d\0½;HÄ´†A¨aø„áêÛ~’Ø:Ã)N±6Ê³"qÜ2zEº—¬b±òißœŒí\'l$Ü×Ü°®Åã¶šüá¢ÑäM€ØÔÔçáéÖ¬IZB.ªCİ¾à¬xTÕR¢p³qßHøÃáfèÿ	Ñ>šğr\r*Ö+ä¡««¾lß{ÒÊyŒ ,As_eòŸ}IW¾ëT&½\n"^O?íÜö£ÏÆÀ¦¸BÄºÔ+úHà&²°6I2‘\0ñ·Lµ^5à\\ÃL¼ßÎmˆ¹v€ŠÔÆ6x"®<\\«	/9µB†w§éèÀ,)}äpß„¸²Vıí.]&<ĞwÑèÀµ•@‹ÓxÃú7"Og™ëÜÇì´.\\£z£Á]U>ã¥Zô(Ö$-ZEzÀ§ÿ|JŠ¸Š<9s²EW›ù&ºr€Ö­£&Æ+Ğàì¾5\0Ïï``Y\\ÿO¦å|~åÒÙHÖU®Ã¢KôÚÿ>ÿ\\ÌÊÃçóXR§_f‰Øæ¼É<FHkyÏ½}¢’éıoæ®RÒQãsÔ©ñ¶%µ^ê‹îıK5ÍtO…òC³C5½>mñçÌáò&	é&à"Êš¤V´İÌ›kïMl\0V?­|$YqS\nûëäøÃ|, ?\'¹¾ÈÙO˜Â)ñ>Ï[‹Öeaââ–‰|˜R*sL½¶>ŸĞ–1KãÃäçÂçhñvx¨ùC»vùp¨6c=fW•Øm5±D‹õÍ‘½/	[£8‚rãY‰–¸zĞL3dÃB\r2Ñ‘—&õ¼í£u,]9Ÿp/§Èlå ©ä‹Ò2©@ ßDR²eĞ8–ú*â÷)”Z¬J¿—n\nß1½ÇÊ”ÍoÜA°™-Öo½É—yµƒm(fR~àd[ªşÏmb;pS˜¹œİZ TÏ+H#ÑäÄÆC.Ûö0¡ºY§ıèñDµÁ†T¦ûi}p‘›Å†kŒ»+ÒvøU\näXÙ¤Ï3eÔ¼ˆ­C‘#üÔ¶Ò‚z²ÍMÍñhcvT’[Ç[¬ËÉÖØû¡Òàù³Kˆéx)³(Y†)Š¾‡â‰îYÎ9lÈŞŠşüôˆ:Ç“¸jıµWã°\\í¨‘ûtÑæÔ€ÀÎä×>XÏn÷½=öhû'.encode('l1')))
